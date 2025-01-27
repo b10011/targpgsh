@@ -1,0 +1,116 @@
+#!/bin/bash
+
+# Initialize variables
+COMPRESSION_FLAG=""  # Default to no compression
+VERBOSITY=""
+OUTPUT_PATH=""
+DATA_FILES=()
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --gzip)
+      COMPRESSION_FLAG="z"
+      shift
+      ;;
+    --xz)
+      COMPRESSION_FLAG="J"
+      shift
+      ;;
+    --raw)
+      COMPRESSION_FLAG=""
+      shift
+      ;;
+    -v)
+      VERBOSITY="v"
+      shift
+      ;;
+    *)
+      if [[ -z "$OUTPUT_PATH" ]]; then
+        OUTPUT_PATH="$1"
+      else
+        DATA_FILES+=("$1")
+      fi
+      shift
+      ;;
+  esac
+done
+
+# Ensure OUTPUT_PATH is set
+if [[ -z "$OUTPUT_PATH" ]]; then
+    echo "Error: Output path is required." >&2
+    echo "Usage: $0 [--gzip|--xz|--raw] OUTPUT_PATH DATA_FILES..." >&2
+    exit 1
+fi
+
+# Ensure there is at least one item in DATA_FILES
+if [[ ${#DATA_FILES[@]} -eq 0 ]]; then
+    echo "Error: at least one DATA_FILE is required."
+    exit 1
+fi
+
+CODE=$(cat << 'EOF'
+#!/bin/bash
+
+SCRIPTNAME=$(basename ${BASH_SOURCE[0]})
+
+OUTPUT_PATH="${SCRIPTNAME%.*}"
+PRINT_DATA="no"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--print-data)
+      PRINT_DATA="yes"
+      shift
+      ;;
+    -d|--directory)
+      shift
+      OUTPUT_PATH="$1"
+      shift
+      ;;
+    -h|--help)
+      echo "Usage: bash ${SCRIPTNAME} [-p / --print-data] [-d / --directory]"
+      exit 0
+      shift
+      ;;
+  esac
+done
+
+CODE_LENGTH=0
+TAR_COMPRESSION=""
+
+if [[ "$CODE_LENGTH" -eq 0 ]]; then
+  if [[ -e "${BASH_SOURCE[0]}.data" ]]; then
+    DATAGETTER='cat ${BASH_SOURCE[0]}.data'
+  else
+    echo "Data does not exist"
+    exit 1
+  fi
+else
+  DATAGETTER='cat ${BASH_SOURCE[0]} | tail -n +${CODE_LENGTH}'
+fi
+
+if [[ "$PRINT_DATA" == "yes" ]]; then
+  eval "${DATAGETTER}"
+else
+  mkdir -p "${OUTPUT_PATH}"
+  eval "${DATAGETTER} | gpg --pinentry-mode loopback -d -o - - | tar x${TAR_COMPRESSION}f - -C ${OUTPUT_PATH}"
+  echo "Extracted"
+fi
+
+exit 0
+# PACKED_DATA_START
+EOF
+)
+
+CODE_LENGTH="$(echo "${CODE}" | wc -l)"
+CODE_LENGTH="$((CODE_LENGTH+1))"
+
+RESULT=$(\
+  echo "${CODE}" \
+  | sed "s/CODE_LENGTH=0/CODE_LENGTH=\"${CODE_LENGTH}\"/g" \
+  | sed "s/TAR_COMPRESSION=\"\"/TAR_COMPRESSION=\"${COMPRESSION_FLAG}\"/g" \
+)
+rm -f $OUTPUT_PATH
+echo -e "${RESULT}" > $OUTPUT_PATH
+tar c${VERBOSITY}${COMPRESSION_FLAG}f - ${DATA_FILES[*]} | gpg -c -o - - >> $OUTPUT_PATH
